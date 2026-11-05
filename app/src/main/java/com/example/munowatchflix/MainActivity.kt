@@ -20,6 +20,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.FileOutputStream
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : AppCompatActivity() {
 
@@ -27,6 +30,10 @@ class MainActivity : AppCompatActivity() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private lateinit var fullscreenContainer: FrameLayout
+
+    // 🔥 YOUR SECRET KEY AND IV
+    private val SECRET_KEY = "xK9\$mP2!vL7&qR4*"
+    private val INIT_VECTOR = "0000000000000000"
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -58,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         
         setContentView(rootLayout)
 
-        // 3. Configure WebView Settings
+        // 3. Configure WebView
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -68,16 +75,15 @@ class MainActivity : AppCompatActivity() {
             mediaPlaybackRequiresUserGesture = false 
             useWideViewPort = true
             loadWithOverviewMode = true
-            cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        // 🔥 4. ADD THE JAVASCRIPT BRIDGE
+        // 4. Add Javascript Bridge for Downloads
         webView.addJavascriptInterface(WebAppInterface(this), "AndroidBridge")
 
-        // 5. Handle Links & Navigation
+        // 5. Handle Links
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url.toString()
@@ -94,7 +100,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 6. Handle Video Fullscreen & File Uploads
+        // 6. Video Fullscreen & File Uploads
         webView.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (customView != null) {
@@ -136,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 7. Native Downloads (Fallback for direct links)
+        // 7. Native Downloads
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             val request = DownloadManager.Request(Uri.parse(url))
             request.setMimeType(mimetype)
@@ -151,10 +157,41 @@ class MainActivity : AppCompatActivity() {
             dm.enqueue(request)
         }
 
-        webView.loadUrl("file:///android_asset/index.html")
+        // 🔥 8. DECRYPT AND LOAD THE HTML
+        try {
+            val inputStream = assets.open("encrypted.txt")
+            val encryptedHtml = inputStream.bufferedReader().use { it.readText() }
+            val decryptedHtml = decryptAES(encryptedHtml, SECRET_KEY)
+            
+            webView.loadDataWithBaseURL("file:///android_asset/", decryptedHtml, "text/html", "UTF-8", null)
+            
+        } catch (e: Exception) {
+            webView.loadData("<html><body style='background:#000;color:red;padding:20px;font-family:sans-serif;'><h2>Error Loading App</h2><p>Could not decrypt app data. Please reinstall.</p></body></html>", "text/html", "UTF-8")
+            Toast.makeText(this, "Decryption failed!", Toast.LENGTH_LONG).show()
+        }
     }
 
-    // 🔥 8. THE BRIDGE CLASS (Handles calls from JavaScript)
+    // 🔥 THE DECRYPTION FUNCTION
+    private fun decryptAES(encryptedText: String, key: String): String {
+        try {
+            val ivSpec = IvParameterSpec(INIT_VECTOR.toByteArray(Charsets.UTF_8))
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            val secretKey = SecretKeySpec(key.toByteArray(Charsets.UTF_8), "AES")
+            
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            
+            // Decode Base64 and decrypt
+            val decodedBytes = Base64.decode(encryptedText.trim(), Base64.DEFAULT)
+            val decryptedBytes = cipher.doFinal(decodedBytes)
+            
+            return String(decryptedBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            throw Exception("Decryption failed: ${e.message}")
+        }
+    }
+
+    // 🔥 9. THE BRIDGE CLASS FOR DOWNLOADS
     inner class WebAppInterface(private val context: Context) {
         @JavascriptInterface
         fun downloadFile(url: String, fileName: String) {
@@ -199,7 +236,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Handle Back Button
     override fun onBackPressed() {
         if (customView != null) {
             webView.webChromeClient?.onHideCustomView()
