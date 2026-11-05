@@ -7,15 +7,19 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -37,7 +41,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. Force Fullscreen (Hide Status Bar & Navigation Bar)
+        // 1. Force Fullscreen
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
         windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
@@ -70,7 +74,10 @@ class MainActivity : AppCompatActivity() {
         
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        // 4. Handle Links & Navigation
+        // 🔥 4. ADD THE JAVASCRIPT BRIDGE
+        webView.addJavascriptInterface(WebAppInterface(this), "AndroidBridge")
+
+        // 5. Handle Links & Navigation
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url.toString()
@@ -87,7 +94,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 5. Handle Video Fullscreen & File Uploads
+        // 6. Handle Video Fullscreen & File Uploads
         webView.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (customView != null) {
@@ -99,7 +106,6 @@ class MainActivity : AppCompatActivity() {
                 fullscreenContainer.addView(view)
                 fullscreenContainer.visibility = View.VISIBLE
                 webView.visibility = View.GONE
-                // Hide system bars again when video goes fullscreen
                 windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
             }
 
@@ -110,7 +116,6 @@ class MainActivity : AppCompatActivity() {
                 customView = null
                 customViewCallback?.onCustomViewHidden()
                 customViewCallback = null
-                // Keep them hidden when returning to app
                 windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
             }
 
@@ -131,7 +136,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 6. Native Downloads
+        // 7. Native Downloads (Fallback for direct links)
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             val request = DownloadManager.Request(Uri.parse(url))
             request.setMimeType(mimetype)
@@ -147,6 +152,51 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.loadUrl("file:///android_asset/index.html")
+    }
+
+    // 🔥 8. THE BRIDGE CLASS (Handles calls from JavaScript)
+    inner class WebAppInterface(private val context: Context) {
+        @JavascriptInterface
+        fun downloadFile(url: String, fileName: String) {
+            try {
+                val request = DownloadManager.Request(Uri.parse(url))
+                request.setTitle(fileName)
+                request.setDescription("Downloading...")
+                request.allowScanningByMediaScanner()
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                dm.enqueue(request)
+                
+                (context as MainActivity).runOnUiThread {
+                    Toast.makeText(context, "Download started!", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                (context as MainActivity).runOnUiThread {
+                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun saveBlobToDownloads(base64Data: String, fileName: String, mimeType: String) {
+            try {
+                val decodedBytes = Base64.decode(base64Data.split(",")[1], Base64.DEFAULT)
+                val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
+                val fos = FileOutputStream(file)
+                fos.write(decodedBytes)
+                fos.close()
+                
+                (context as MainActivity).runOnUiThread {
+                    Toast.makeText(context, "Saved to Downloads: $fileName", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                (context as MainActivity).runOnUiThread {
+                    Toast.makeText(context, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     // Handle Back Button
